@@ -13,6 +13,6 @@ export default {
     json(),
     commonjs(),
     babel({extensions: ['.ts', '.js']}),
-    nodeResolve(),
+    nodeResolve({preferBuiltins: false}),
   ]
 }

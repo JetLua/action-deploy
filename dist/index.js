@@ -23,8 +23,6 @@ var require$$0$a = require('constants');
 var require$$1$5 = require('stream');
 var require$$0$b = require('events');
 var require$$1$6 = require('tls');
-var require$$8 = require('string_decoder/');
-var require$$1$8 = require('string_decoder');
 var require$$2$2 = require('vm');
 var require$$2$3 = require('module');
 var require$$9 = require('async_hooks');
@@ -51,8 +49,6 @@ var require$$0__default$5 = /*#__PURE__*/_interopDefaultLegacy(require$$0$a);
 var require$$1__default$3 = /*#__PURE__*/_interopDefaultLegacy(require$$1$5);
 var require$$0__default$6 = /*#__PURE__*/_interopDefaultLegacy(require$$0$b);
 var require$$1__default$4 = /*#__PURE__*/_interopDefaultLegacy(require$$1$6);
-var require$$8__default = /*#__PURE__*/_interopDefaultLegacy(require$$8);
-var require$$1__default$6 = /*#__PURE__*/_interopDefaultLegacy(require$$1$8);
 var require$$2__default$1 = /*#__PURE__*/_interopDefaultLegacy(require$$2$2);
 var require$$2__default$2 = /*#__PURE__*/_interopDefaultLegacy(require$$2$3);
 var require$$9__default = /*#__PURE__*/_interopDefaultLegacy(require$$9);
@@ -17646,6 +17642,244 @@ function require_stream_duplex$1() {
   return _stream_duplex$1;
 }
 
+var string_decoder$1 = {};
+
+var hasRequiredString_decoder$1;
+
+function requireString_decoder$1() {
+  if (hasRequiredString_decoder$1) return string_decoder$1;
+  hasRequiredString_decoder$1 = 1; // Copyright Joyent, Inc. and other Node contributors.
+  //
+  // Permission is hereby granted, free of charge, to any person obtaining a
+  // copy of this software and associated documentation files (the
+  // "Software"), to deal in the Software without restriction, including
+  // without limitation the rights to use, copy, modify, merge, publish,
+  // distribute, sublicense, and/or sell copies of the Software, and to permit
+  // persons to whom the Software is furnished to do so, subject to the
+  // following conditions:
+  //
+  // The above copyright notice and this permission notice shall be included
+  // in all copies or substantial portions of the Software.
+  //
+  // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+  // OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  // MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+  // NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+  // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+  // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+  // USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  var Buffer = require$$0__default$3["default"].Buffer;
+
+  var isBufferEncoding = Buffer.isEncoding || function (encoding) {
+    switch (encoding && encoding.toLowerCase()) {
+      case 'hex':
+      case 'utf8':
+      case 'utf-8':
+      case 'ascii':
+      case 'binary':
+      case 'base64':
+      case 'ucs2':
+      case 'ucs-2':
+      case 'utf16le':
+      case 'utf-16le':
+      case 'raw':
+        return true;
+
+      default:
+        return false;
+    }
+  };
+
+  function assertEncoding(encoding) {
+    if (encoding && !isBufferEncoding(encoding)) {
+      throw new Error('Unknown encoding: ' + encoding);
+    }
+  } // StringDecoder provides an interface for efficiently splitting a series of
+  // buffers into a series of JS strings without breaking apart multi-byte
+  // characters. CESU-8 is handled as part of the UTF-8 encoding.
+  //
+  // @TODO Handling all encodings inside a single object makes it very difficult
+  // to reason about this code, so it should be split up in the future.
+  // @TODO There should be a utf8-strict encoding that rejects invalid UTF-8 code
+  // points as used by CESU-8.
+
+
+  var StringDecoder = string_decoder$1.StringDecoder = function (encoding) {
+    this.encoding = (encoding || 'utf8').toLowerCase().replace(/[-_]/, '');
+    assertEncoding(encoding);
+
+    switch (this.encoding) {
+      case 'utf8':
+        // CESU-8 represents each of Surrogate Pair by 3-bytes
+        this.surrogateSize = 3;
+        break;
+
+      case 'ucs2':
+      case 'utf16le':
+        // UTF-16 represents each of Surrogate Pair by 2-bytes
+        this.surrogateSize = 2;
+        this.detectIncompleteChar = utf16DetectIncompleteChar;
+        break;
+
+      case 'base64':
+        // Base-64 stores 3 bytes in 4 chars, and pads the remainder.
+        this.surrogateSize = 3;
+        this.detectIncompleteChar = base64DetectIncompleteChar;
+        break;
+
+      default:
+        this.write = passThroughWrite;
+        return;
+    } // Enough space to store all bytes of a single character. UTF-8 needs 4
+    // bytes, but CESU-8 may require up to 6 (3 bytes per surrogate).
+
+
+    this.charBuffer = new Buffer(6); // Number of bytes received for the current incomplete multi-byte character.
+
+    this.charReceived = 0; // Number of bytes expected for the current incomplete multi-byte character.
+
+    this.charLength = 0;
+  }; // write decodes the given buffer and returns it as JS string that is
+  // guaranteed to not contain any partial multi-byte characters. Any partial
+  // character found at the end of the buffer is buffered up, and will be
+  // returned when calling write again with the remaining bytes.
+  //
+  // Note: Converting a Buffer containing an orphan surrogate to a String
+  // currently works, but converting a String to a Buffer (via `new Buffer`, or
+  // Buffer#write) will replace incomplete surrogates with the unicode
+  // replacement character. See https://codereview.chromium.org/121173009/ .
+
+
+  StringDecoder.prototype.write = function (buffer) {
+    var charStr = ''; // if our last write ended with an incomplete multibyte character
+
+    while (this.charLength) {
+      // determine how many remaining bytes this buffer has to offer for this char
+      var available = buffer.length >= this.charLength - this.charReceived ? this.charLength - this.charReceived : buffer.length; // add the new bytes to the char buffer
+
+      buffer.copy(this.charBuffer, this.charReceived, 0, available);
+      this.charReceived += available;
+
+      if (this.charReceived < this.charLength) {
+        // still not enough chars in this buffer? wait for more ...
+        return '';
+      } // remove bytes belonging to the current character from the buffer
+
+
+      buffer = buffer.slice(available, buffer.length); // get the character that was split
+
+      charStr = this.charBuffer.slice(0, this.charLength).toString(this.encoding); // CESU-8: lead surrogate (D800-DBFF) is also the incomplete character
+
+      var charCode = charStr.charCodeAt(charStr.length - 1);
+
+      if (charCode >= 0xD800 && charCode <= 0xDBFF) {
+        this.charLength += this.surrogateSize;
+        charStr = '';
+        continue;
+      }
+
+      this.charReceived = this.charLength = 0; // if there are no more bytes in this buffer, just emit our char
+
+      if (buffer.length === 0) {
+        return charStr;
+      }
+
+      break;
+    } // determine and set charLength / charReceived
+
+
+    this.detectIncompleteChar(buffer);
+    var end = buffer.length;
+
+    if (this.charLength) {
+      // buffer the incomplete character bytes we got
+      buffer.copy(this.charBuffer, 0, buffer.length - this.charReceived, end);
+      end -= this.charReceived;
+    }
+
+    charStr += buffer.toString(this.encoding, 0, end);
+    var end = charStr.length - 1;
+    var charCode = charStr.charCodeAt(end); // CESU-8: lead surrogate (D800-DBFF) is also the incomplete character
+
+    if (charCode >= 0xD800 && charCode <= 0xDBFF) {
+      var size = this.surrogateSize;
+      this.charLength += size;
+      this.charReceived += size;
+      this.charBuffer.copy(this.charBuffer, size, 0, size);
+      buffer.copy(this.charBuffer, 0, 0, size);
+      return charStr.substring(0, end);
+    } // or just emit the charStr
+
+
+    return charStr;
+  }; // detectIncompleteChar determines if there is an incomplete UTF-8 character at
+  // the end of the given buffer. If so, it sets this.charLength to the byte
+  // length that character, and sets this.charReceived to the number of bytes
+  // that are available for this character.
+
+
+  StringDecoder.prototype.detectIncompleteChar = function (buffer) {
+    // determine how many bytes we have to check at the end of this buffer
+    var i = buffer.length >= 3 ? 3 : buffer.length; // Figure out if one of the last i bytes of our buffer announces an
+    // incomplete char.
+
+    for (; i > 0; i--) {
+      var c = buffer[buffer.length - i]; // See http://en.wikipedia.org/wiki/UTF-8#Description
+      // 110XXXXX
+
+      if (i == 1 && c >> 5 == 0x06) {
+        this.charLength = 2;
+        break;
+      } // 1110XXXX
+
+
+      if (i <= 2 && c >> 4 == 0x0E) {
+        this.charLength = 3;
+        break;
+      } // 11110XXX
+
+
+      if (i <= 3 && c >> 3 == 0x1E) {
+        this.charLength = 4;
+        break;
+      }
+    }
+
+    this.charReceived = i;
+  };
+
+  StringDecoder.prototype.end = function (buffer) {
+    var res = '';
+    if (buffer && buffer.length) res = this.write(buffer);
+
+    if (this.charReceived) {
+      var cr = this.charReceived;
+      var buf = this.charBuffer;
+      var enc = this.encoding;
+      res += buf.slice(0, cr).toString(enc);
+    }
+
+    return res;
+  };
+
+  function passThroughWrite(buffer) {
+    return buffer.toString(this.encoding);
+  }
+
+  function utf16DetectIncompleteChar(buffer) {
+    this.charReceived = buffer.length % 2;
+    this.charLength = this.charReceived ? 2 : 0;
+  }
+
+  function base64DetectIncompleteChar(buffer) {
+    this.charReceived = buffer.length % 3;
+    this.charLength = this.charReceived ? 3 : 0;
+  }
+
+  return string_decoder$1;
+}
+
 var _stream_readable$1;
 
 var hasRequired_stream_readable$1;
@@ -17762,7 +17996,7 @@ function require_stream_readable$1() {
     this.encoding = null;
 
     if (options.encoding) {
-      if (!StringDecoder) StringDecoder = require$$8__default["default"].StringDecoder;
+      if (!StringDecoder) StringDecoder = requireString_decoder$1().StringDecoder;
       this.decoder = new StringDecoder(options.encoding);
       this.encoding = options.encoding;
     }
@@ -17853,7 +18087,7 @@ function require_stream_readable$1() {
 
 
   Readable.prototype.setEncoding = function (enc) {
-    if (!StringDecoder) StringDecoder = require$$8__default["default"].StringDecoder;
+    if (!StringDecoder) StringDecoder = requireString_decoder$1().StringDecoder;
     this._readableState.decoder = new StringDecoder(enc);
     this._readableState.encoding = enc;
     return this;
@@ -24445,6 +24679,419 @@ function requireBomHandling() {
 
 var encodings = {};
 
+var string_decoder = {};
+
+var safeBuffer = {exports: {}};
+
+/*! safe-buffer. MIT License. Feross Aboukhadijeh <https://feross.org/opensource> */
+var hasRequiredSafeBuffer;
+
+function requireSafeBuffer() {
+  if (hasRequiredSafeBuffer) return safeBuffer.exports;
+  hasRequiredSafeBuffer = 1;
+
+  (function (module, exports) {
+    /* eslint-disable node/no-deprecated-api */
+    var buffer = require$$0__default$3["default"];
+    var Buffer = buffer.Buffer; // alternative to using Object.keys for old browsers
+
+    function copyProps(src, dst) {
+      for (var key in src) {
+        dst[key] = src[key];
+      }
+    }
+
+    if (Buffer.from && Buffer.alloc && Buffer.allocUnsafe && Buffer.allocUnsafeSlow) {
+      module.exports = buffer;
+    } else {
+      // Copy properties from require('buffer')
+      copyProps(buffer, exports);
+      exports.Buffer = SafeBuffer;
+    }
+
+    function SafeBuffer(arg, encodingOrOffset, length) {
+      return Buffer(arg, encodingOrOffset, length);
+    }
+
+    SafeBuffer.prototype = Object.create(Buffer.prototype); // Copy static methods from Buffer
+
+    copyProps(Buffer, SafeBuffer);
+
+    SafeBuffer.from = function (arg, encodingOrOffset, length) {
+      if (typeof arg === 'number') {
+        throw new TypeError('Argument must not be a number');
+      }
+
+      return Buffer(arg, encodingOrOffset, length);
+    };
+
+    SafeBuffer.alloc = function (size, fill, encoding) {
+      if (typeof size !== 'number') {
+        throw new TypeError('Argument must be a number');
+      }
+
+      var buf = Buffer(size);
+
+      if (fill !== undefined) {
+        if (typeof encoding === 'string') {
+          buf.fill(fill, encoding);
+        } else {
+          buf.fill(fill);
+        }
+      } else {
+        buf.fill(0);
+      }
+
+      return buf;
+    };
+
+    SafeBuffer.allocUnsafe = function (size) {
+      if (typeof size !== 'number') {
+        throw new TypeError('Argument must be a number');
+      }
+
+      return Buffer(size);
+    };
+
+    SafeBuffer.allocUnsafeSlow = function (size) {
+      if (typeof size !== 'number') {
+        throw new TypeError('Argument must be a number');
+      }
+
+      return buffer.SlowBuffer(size);
+    };
+  })(safeBuffer, safeBuffer.exports);
+
+  return safeBuffer.exports;
+}
+
+var hasRequiredString_decoder;
+
+function requireString_decoder() {
+  if (hasRequiredString_decoder) return string_decoder;
+  hasRequiredString_decoder = 1; // Copyright Joyent, Inc. and other Node contributors.
+  /*<replacement>*/
+
+
+  var Buffer = requireSafeBuffer().Buffer;
+  /*</replacement>*/
+
+  var isEncoding = Buffer.isEncoding || function (encoding) {
+    encoding = '' + encoding;
+
+    switch (encoding && encoding.toLowerCase()) {
+      case 'hex':
+      case 'utf8':
+      case 'utf-8':
+      case 'ascii':
+      case 'binary':
+      case 'base64':
+      case 'ucs2':
+      case 'ucs-2':
+      case 'utf16le':
+      case 'utf-16le':
+      case 'raw':
+        return true;
+
+      default:
+        return false;
+    }
+  };
+
+  function _normalizeEncoding(enc) {
+    if (!enc) return 'utf8';
+    var retried;
+
+    while (true) {
+      switch (enc) {
+        case 'utf8':
+        case 'utf-8':
+          return 'utf8';
+
+        case 'ucs2':
+        case 'ucs-2':
+        case 'utf16le':
+        case 'utf-16le':
+          return 'utf16le';
+
+        case 'latin1':
+        case 'binary':
+          return 'latin1';
+
+        case 'base64':
+        case 'ascii':
+        case 'hex':
+          return enc;
+
+        default:
+          if (retried) return; // undefined
+
+          enc = ('' + enc).toLowerCase();
+          retried = true;
+      }
+    }
+  }
+  // modules monkey-patch it to support additional encodings
+
+  function normalizeEncoding(enc) {
+    var nenc = _normalizeEncoding(enc);
+
+    if (typeof nenc !== 'string' && (Buffer.isEncoding === isEncoding || !isEncoding(enc))) throw new Error('Unknown encoding: ' + enc);
+    return nenc || enc;
+  } // StringDecoder provides an interface for efficiently splitting a series of
+  // buffers into a series of JS strings without breaking apart multi-byte
+  // characters.
+
+
+  string_decoder.StringDecoder = StringDecoder;
+
+  function StringDecoder(encoding) {
+    this.encoding = normalizeEncoding(encoding);
+    var nb;
+
+    switch (this.encoding) {
+      case 'utf16le':
+        this.text = utf16Text;
+        this.end = utf16End;
+        nb = 4;
+        break;
+
+      case 'utf8':
+        this.fillLast = utf8FillLast;
+        nb = 4;
+        break;
+
+      case 'base64':
+        this.text = base64Text;
+        this.end = base64End;
+        nb = 3;
+        break;
+
+      default:
+        this.write = simpleWrite;
+        this.end = simpleEnd;
+        return;
+    }
+
+    this.lastNeed = 0;
+    this.lastTotal = 0;
+    this.lastChar = Buffer.allocUnsafe(nb);
+  }
+
+  StringDecoder.prototype.write = function (buf) {
+    if (buf.length === 0) return '';
+    var r;
+    var i;
+
+    if (this.lastNeed) {
+      r = this.fillLast(buf);
+      if (r === undefined) return '';
+      i = this.lastNeed;
+      this.lastNeed = 0;
+    } else {
+      i = 0;
+    }
+
+    if (i < buf.length) return r ? r + this.text(buf, i) : this.text(buf, i);
+    return r || '';
+  };
+
+  StringDecoder.prototype.end = utf8End; // Returns only complete characters in a Buffer
+
+  StringDecoder.prototype.text = utf8Text; // Attempts to complete a partial non-UTF-8 character using bytes from a Buffer
+
+  StringDecoder.prototype.fillLast = function (buf) {
+    if (this.lastNeed <= buf.length) {
+      buf.copy(this.lastChar, this.lastTotal - this.lastNeed, 0, this.lastNeed);
+      return this.lastChar.toString(this.encoding, 0, this.lastTotal);
+    }
+
+    buf.copy(this.lastChar, this.lastTotal - this.lastNeed, 0, buf.length);
+    this.lastNeed -= buf.length;
+  }; // Checks the type of a UTF-8 byte, whether it's ASCII, a leading byte, or a
+  // continuation byte. If an invalid byte is detected, -2 is returned.
+
+
+  function utf8CheckByte(byte) {
+    if (byte <= 0x7F) return 0;else if (byte >> 5 === 0x06) return 2;else if (byte >> 4 === 0x0E) return 3;else if (byte >> 3 === 0x1E) return 4;
+    return byte >> 6 === 0x02 ? -1 : -2;
+  } // Checks at most 3 bytes at the end of a Buffer in order to detect an
+  // incomplete multi-byte UTF-8 character. The total number of bytes (2, 3, or 4)
+  // needed to complete the UTF-8 character (if applicable) are returned.
+
+
+  function utf8CheckIncomplete(self, buf, i) {
+    var j = buf.length - 1;
+    if (j < i) return 0;
+    var nb = utf8CheckByte(buf[j]);
+
+    if (nb >= 0) {
+      if (nb > 0) self.lastNeed = nb - 1;
+      return nb;
+    }
+
+    if (--j < i || nb === -2) return 0;
+    nb = utf8CheckByte(buf[j]);
+
+    if (nb >= 0) {
+      if (nb > 0) self.lastNeed = nb - 2;
+      return nb;
+    }
+
+    if (--j < i || nb === -2) return 0;
+    nb = utf8CheckByte(buf[j]);
+
+    if (nb >= 0) {
+      if (nb > 0) {
+        if (nb === 2) nb = 0;else self.lastNeed = nb - 3;
+      }
+
+      return nb;
+    }
+
+    return 0;
+  } // Validates as many continuation bytes for a multi-byte UTF-8 character as
+  // needed or are available. If we see a non-continuation byte where we expect
+  // one, we "replace" the validated continuation bytes we've seen so far with
+  // a single UTF-8 replacement character ('\ufffd'), to match v8's UTF-8 decoding
+  // behavior. The continuation byte check is included three times in the case
+  // where all of the continuation bytes for a character exist in the same buffer.
+  // It is also done this way as a slight performance increase instead of using a
+  // loop.
+
+
+  function utf8CheckExtraBytes(self, buf, p) {
+    if ((buf[0] & 0xC0) !== 0x80) {
+      self.lastNeed = 0;
+      return '\ufffd';
+    }
+
+    if (self.lastNeed > 1 && buf.length > 1) {
+      if ((buf[1] & 0xC0) !== 0x80) {
+        self.lastNeed = 1;
+        return '\ufffd';
+      }
+
+      if (self.lastNeed > 2 && buf.length > 2) {
+        if ((buf[2] & 0xC0) !== 0x80) {
+          self.lastNeed = 2;
+          return '\ufffd';
+        }
+      }
+    }
+  } // Attempts to complete a multi-byte UTF-8 character using bytes from a Buffer.
+
+
+  function utf8FillLast(buf) {
+    var p = this.lastTotal - this.lastNeed;
+    var r = utf8CheckExtraBytes(this, buf);
+    if (r !== undefined) return r;
+
+    if (this.lastNeed <= buf.length) {
+      buf.copy(this.lastChar, p, 0, this.lastNeed);
+      return this.lastChar.toString(this.encoding, 0, this.lastTotal);
+    }
+
+    buf.copy(this.lastChar, p, 0, buf.length);
+    this.lastNeed -= buf.length;
+  } // Returns all complete UTF-8 characters in a Buffer. If the Buffer ended on a
+  // partial character, the character's bytes are buffered until the required
+  // number of bytes are available.
+
+
+  function utf8Text(buf, i) {
+    var total = utf8CheckIncomplete(this, buf, i);
+    if (!this.lastNeed) return buf.toString('utf8', i);
+    this.lastTotal = total;
+    var end = buf.length - (total - this.lastNeed);
+    buf.copy(this.lastChar, 0, end);
+    return buf.toString('utf8', i, end);
+  } // For UTF-8, a replacement character is added when ending on a partial
+  // character.
+
+
+  function utf8End(buf) {
+    var r = buf && buf.length ? this.write(buf) : '';
+    if (this.lastNeed) return r + '\ufffd';
+    return r;
+  } // UTF-16LE typically needs two bytes per character, but even if we have an even
+  // number of bytes available, we need to check if we end on a leading/high
+  // surrogate. In that case, we need to wait for the next two bytes in order to
+  // decode the last character properly.
+
+
+  function utf16Text(buf, i) {
+    if ((buf.length - i) % 2 === 0) {
+      var r = buf.toString('utf16le', i);
+
+      if (r) {
+        var c = r.charCodeAt(r.length - 1);
+
+        if (c >= 0xD800 && c <= 0xDBFF) {
+          this.lastNeed = 2;
+          this.lastTotal = 4;
+          this.lastChar[0] = buf[buf.length - 2];
+          this.lastChar[1] = buf[buf.length - 1];
+          return r.slice(0, -1);
+        }
+      }
+
+      return r;
+    }
+
+    this.lastNeed = 1;
+    this.lastTotal = 2;
+    this.lastChar[0] = buf[buf.length - 1];
+    return buf.toString('utf16le', i, buf.length - 1);
+  } // For UTF-16LE we do not explicitly append special replacement characters if we
+  // end on a partial character, we simply let v8 handle that.
+
+
+  function utf16End(buf) {
+    var r = buf && buf.length ? this.write(buf) : '';
+
+    if (this.lastNeed) {
+      var end = this.lastTotal - this.lastNeed;
+      return r + this.lastChar.toString('utf16le', 0, end);
+    }
+
+    return r;
+  }
+
+  function base64Text(buf, i) {
+    var n = (buf.length - i) % 3;
+    if (n === 0) return buf.toString('base64', i);
+    this.lastNeed = 3 - n;
+    this.lastTotal = 3;
+
+    if (n === 1) {
+      this.lastChar[0] = buf[buf.length - 1];
+    } else {
+      this.lastChar[0] = buf[buf.length - 2];
+      this.lastChar[1] = buf[buf.length - 1];
+    }
+
+    return buf.toString('base64', i, buf.length - n);
+  }
+
+  function base64End(buf) {
+    var r = buf && buf.length ? this.write(buf) : '';
+    if (this.lastNeed) return r + this.lastChar.toString('base64', 0, 3 - this.lastNeed);
+    return r;
+  } // Pass bytes on through for single-byte encodings (e.g. ascii, latin1, hex)
+
+
+  function simpleWrite(buf) {
+    return buf.toString(this.encoding);
+  }
+
+  function simpleEnd(buf) {
+    return buf && buf.length ? this.write(buf) : '';
+  }
+
+  return string_decoder;
+}
+
 var internal;
 var hasRequiredInternal;
 
@@ -24502,7 +25149,7 @@ function requireInternal() {
   InternalCodec.prototype.decoder = InternalDecoder; //------------------------------------------------------------------------------
   // We use node.js internal decoder. Its signature is the same as ours.
 
-  var StringDecoder = require$$1__default$6["default"].StringDecoder;
+  var StringDecoder = requireString_decoder().StringDecoder;
   if (!StringDecoder.prototype.end) // Node v0.8 doesn't have this method.
     StringDecoder.prototype.end = function () {};
 
@@ -79236,7 +79883,7 @@ function require_stream_readable() {
     this.encoding = null;
 
     if (options.encoding) {
-      if (!StringDecoder) StringDecoder = require$$8__default["default"].StringDecoder;
+      if (!StringDecoder) StringDecoder = requireString_decoder().StringDecoder;
       this.decoder = new StringDecoder(options.encoding);
       this.encoding = options.encoding;
     }
@@ -79398,7 +80045,7 @@ function require_stream_readable() {
 
 
   Readable.prototype.setEncoding = function (enc) {
-    if (!StringDecoder) StringDecoder = require$$8__default["default"].StringDecoder;
+    if (!StringDecoder) StringDecoder = requireString_decoder().StringDecoder;
     var decoder = new StringDecoder(enc);
     this._readableState.decoder = decoder; // If setEncoding(null), decoder.encoding equals utf8
 
