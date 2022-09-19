@@ -88531,12 +88531,12 @@ const uploader = new qiniu.form_up.FormUploader();
   for await (const file of globber.globGenerator()) {
     const stats = await promises.stat(file);
     if (stats.isDirectory()) continue;
-    await upload(file);
+    upload(file);
   }
 }();
 
-async function upload(file) {
-  await new Promise(resolve => {
+function upload(file) {
+  new Promise(resolve => {
     const key = `${destDir}/${node_path.relative(sourceDir, file)}`;
     const policy = new qiniu.rs.PutPolicy({
       scope: `${bucket}:${key}`

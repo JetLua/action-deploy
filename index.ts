@@ -20,18 +20,16 @@ const uploader = new qiniu.form_up.FormUploader()
     `${sourceDir}/*`
   ].join('\n'))
 
-
-
   for await (const file of globber.globGenerator()) {
     const stats = await stat(file)
     if (stats.isDirectory()) continue
-    await upload(file)
+    upload(file)
   }
 }()
 
 
-async function upload(file: string) {
-  await new Promise<void>(resolve => {
+function upload(file: string) {
+  new Promise<void>(resolve => {
     const key = `${destDir}/${relative(sourceDir, file)}`
 
     const policy = new qiniu.rs.PutPolicy({
